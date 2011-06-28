@@ -1,0 +1,21 @@
+==Linux==
+To compile on Linux:
+
+gcc -Wall -ggdb -D_FILE_OFFSET_BITS=64 -lfuse -I/usr/include/mysql -L/usr/lib/mysql \
+  -I/usr/include/fuse -lmysqlclient -o dfuse dfuse.c
+
+Note that on CentOS, you'll need a newer version of the kernel than what may have come on
+your machine.
+
+==Mac OS X==
+To build on Mac OS X:
+
+gcc -D__DARWIN_64_BIT_INO_T=0 -I/usr/local/include/fuse -D_FILE_OFFSET_BITS=64 -ggdb \
+  -I/usr/local/mysql/include -D__FreeBSD__=10 -lfuse -L/usr/local/mysql/lib -lmysqlclient \
+  -o dfuse dfuse.c
+
+On early 2011 Macs, which use a 64-bit kernel, you'll need a 64-bit version of the
+FUSE kext.  Finding that is left as an exercise for the reader.  Depending on how you
+installed MySQL, you may also need to run:
+
+export DYLD_LIBRARY_PATH="$DYLD_LIBRARY_PATH:/usr/local/mysql/lib/"
