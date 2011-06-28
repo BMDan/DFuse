@@ -561,16 +561,14 @@ static int dfuse_opt_proc(void *data, const char *arg, int key, struct fuse_args
 
 FILE *debug_fd( void )
 {
-    FILE *fp;
-
     if ( cached_debug_fd ) { return cached_debug_fd; }
 
-    if ( !( cached_debug_fd = fp = fopen( "/tmp/fusedebug", "a" ) ) )
+    if ( !( cached_debug_fd = fopen( "/tmp/fusedebug", "a" ) ) )
     {
 	exit(-1);
     }
 
-    return fp;
+    return cached_debug_fd;
 }
 
 static int dfuse_readlink(const char *path, char *linkbuf, size_t bufsize )
