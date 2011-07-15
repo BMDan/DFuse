@@ -1,14 +1,15 @@
 /*
  * Code not otherwise copyrighted is Copyright (C) 2010-2011 Dan Reif/BlackMesh Managed Hosting.
- * This is version 0.3a.
+ * This is version 0.3.3a.
  * 
  * With the permission of Miklos Szeredi, the entirety of this file is exclusively licensed
- * under the GNU Affero GPL:
+ * under the GNU GPL, version 2 or later:
  *
  * DFUSE, (C) Dan Reif, Miklos Szeredi, and others, based on the Hello FS template by Miklos
  * Szeredi <miklos@szeredi.hu>.  This code and any resultant executables or libraries are
- * governed by the terms of the newest version of the Affero GPL published by the GNU project
- * at www.gnu.org at the time of its use or modification.
+ * governed by the terms of the GPL published by the GNU project of the Free Software
+ * Foundation, either version 2, or (at your option) the latest version available at at
+ * www.gnu.org at the time of its use or modification.
  */
 
 /*
@@ -22,6 +23,7 @@
  *                and there was a bunch of extra bounds-checking added.  Oh, and put more stuff
  *                into #defines that belongs there instead of as magic numbers.
  * 0.3.2a djr@BM: Found and fixed a memory leak.
+ * 0.3.3a djr@BM: Changed license to GPL v2+.
  */
 
 #define FUSE_USE_VERSION 25
