@@ -1,6 +1,6 @@
 DFuse: Drupal FUSE
 
-Let's start with FUSE: it's a like shim that sits between the kernel and a userspace program. It means that you can use userspace libraries in the implementation of file systems, which is important in our case.  http://fuse.sourceforge.net/fuse_structure.png gives you an idea of how it works.
+Let's start with FUSE: it's like a shim that sits between the kernel and a userspace program. It means that you can use userspace libraries in the implementation of file systems, which is important in our case.  http://fuse.sourceforge.net/fuse_structure.png gives you an idea of how it works.
 
 So what's happening with dfuse is that is that we change the semantics of a database into a 1:1 representation on the filesystem via FUSE.  A table in SQL becomes a directory on the filesystem.  Each "file" in that directory is named by the primary key.which makes sense, since a primary key is already guaranteed to be unique, just like a filename, so we can easily map back and forth between the two.
 
@@ -11,5 +11,3 @@ As a bonus, because the semantics by means of which we refer to a given piece of
 As it stands, however, I think it's already pretty darn powerful; it allows you to do things like checking the site in before presenting it to the customer, then, when the customer calls back five minutes later because the entire site suddenly lost all its CSS, running a simple diff in order to determine what they changed.  Hint: it's in the variables table.  ;)
 
 The other nice part about the way the code is written is that it's exceedingly flexible.  If you don't care about the cache_* tables (and generally you wouldn't), just don't map them onto directories.  If you have something where the primary key is composed of multiple columns, just create a unique, two-way mapping between them (from something as simple as CONCAT(column1,"-",column2) to something terribly complex).  The goal is that dfuse itself should be like a good UNIX command: simple, but spectacularly good at the one thing it does.  Intelligence is then added to it not by modifying it to support a particular use case, but simply by giving it the right parameters or execution context.
-
-That's the five-minute version; if you want a longer one, I'll be presenting at CapitalCamp, July 22-23, in Washington, DC.  (http://www.capitalcamp.org/sessions/dfuse-solving-configuration-and-content-management-puzzle-d6-d7-and-beyond-and-d5-too)
