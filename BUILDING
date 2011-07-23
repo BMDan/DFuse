@@ -2,10 +2,11 @@
 To compile on Linux:
 
 gcc -Wall -ggdb -D_FILE_OFFSET_BITS=64 -lfuse -I/usr/include/mysql -L/usr/lib/mysql \
-  -I/usr/include/fuse -lmysqlclient -o dfuse dfuse.c
+  -L/usr/lib64/mysql -I/usr/include/fuse -lmysqlclient -o dfuse dfuse.c
 
-Note that on CentOS, you'll need a newer version of the kernel than what may have come on
-your machine.
+Note that on RHEL/CentOS, you'll need a newer version of the kernel than what may have
+come on your machine, as well as (at minimum) the packages "mysql-devel", "mysql-libs",
+"fuse-devel", and "fuse-libs".
 
 ==Mac OS X==
 To build on Mac OS X:
