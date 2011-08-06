@@ -24,6 +24,7 @@
  *                into #defines that belongs there instead of as magic numbers.
  * 0.3.2a djr@BM: Found and fixed a memory leak.
  * 0.3.3a djr@BM: Changed license to GPL v2+.
+ * Subsequent versions: See https://github.com/bmdan/dfuse
  */
 
 #define FUSE_USE_VERSION 25
