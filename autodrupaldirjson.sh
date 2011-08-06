@@ -15,8 +15,11 @@ export FUSEOPTS="-H $MYSQL_HOST -p $MYSQL_PASS -u $MYSQL_USER -D $MYSQL_DB"
 for table in $(mysql $MYOPTS -e 'show tables' | sed '1d')
   do PRIKEY=$(mysql $MYOPTS -e 'show create table '$table'\G' | grep -F 'PRIMARY KEY')
 
-  # We don't currently handled multiple primary keys; synthesize those by hand.
+  # We don't currently handle multiple primary keys; synthesize those by hand.
   echo $PRIKEY | sed 's/,$//' | grep -qF ',' && continue
+
+  # No primary key?  Skip it.
+  [ -z "$PRIKEY" ] && continue
 
   PRIKEY=$(echo $PRIKEY | sed 's/`).*//;s/PRIMARY KEY...//')
   echo $table: $PRIKEY
