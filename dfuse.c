@@ -785,6 +785,12 @@ static int dfuse_getattr(const char *path, struct stat *stbuf)
 	    stbuf->st_atime = stbuf->st_mtime = stbuf->st_ctime = atoi(sql_row[1]);
 	}
 
+	// TODO: properly support timestamp in json mode
+	if ( json && options.timestamp )
+	{
+	    stbuf->st_atime = stbuf->st_mtime = stbuf->st_ctime = time(NULL);
+	}
+
 	DFUSE_FREE(url_path);
 	DFUSE_FREE(url_path_struct);
 	DFUSE_FREE(clean_path);
@@ -1286,6 +1292,8 @@ void usage( char **argv )
 	"  -P: Prim. Key(s) [MANDATORY]\n"
 	"  -c: Column(s) [MANDATORY]\n"
 	"  -T: Timestamp Column (Try 'UNIX_TIMESTAMP()' if your RCS is braindead.)\n"
+	"      At the moment, defaults to NOW() in --json mode when specified,\n"
+	"      regardless of what argument you pass to it.\n"
 	"  --lazy-connect: Connect to DB only when needed, disconnect afterward.\n"
 	"                  By default, a connection is opened and kept open for\n"
 	"                  as long as the server will let us.  In lazy mode, we\n"
