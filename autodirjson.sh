@@ -5,7 +5,7 @@ MYSQL_HOST="1.2.3.4"
 MYSQL_USER="someuser"
 MYSQL_PASS="somepass"
 MYSQL_DB="somedb"
-AUTODRUPALDIR=$(/bin/pwd)/autodrupaldirjson
+AUTODIR=$(/bin/pwd)/autodirjson
 
 ## You shouldn't have to modify anything below this line.
 
@@ -25,10 +25,10 @@ for table in $(mysql $MYOPTS -e 'show tables' | sed '1d')
   echo $table: $PRIKEY
 
   #Unmount anything that was there, just in case.
-  umount $AUTODRUPALDIR/$table >>/dev/null 2>&1
+  umount $AUTODIR/$table >>/dev/null 2>&1
 
-  mkdir -p $AUTODRUPALDIR/$table
+  mkdir -p $AUTODIR/$table
 
-  ./dfuse $FUSEOPTS -t $table -P $PRIKEY -c '*' --json $AUTODRUPALDIR/$table
+  ./dfuse $FUSEOPTS -t $table -P $PRIKEY -c '*' --json $AUTODIR/$table
   sleep 0.25
 done 
