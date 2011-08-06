@@ -1,4 +1,4 @@
-DFuse: Drupal FUSE
+DFuse: Database FUSE.  Your database, presented as a filesystem.
 
 Let's start with FUSE: it's like a shim that sits between the kernel and a userspace program. It means that you can use userspace libraries in the implementation of file systems, which is important in our case.  http://fuse.sourceforge.net/fuse_structure.png gives you an idea of how it works.
 
