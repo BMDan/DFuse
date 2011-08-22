@@ -1,6 +1,6 @@
 /*
  * Code not otherwise copyrighted is Copyright (C) 2010-2011 Dan Reif/BlackMesh Managed Hosting.
- * This is version 0.3.3a.
+ * This is version 0.4a.
  * 
  * With the permission of Miklos Szeredi, the entirety of this file is exclusively licensed
  * under the GNU GPL, version 2 or later:
@@ -61,6 +61,13 @@ struct string_length {
     unsigned long length;
 };
 
+struct dfuse_nv_ll {
+    struct string_length * name;
+    struct string_length * value; 
+    struct dfuse_nv_ll * nvll_value;
+    struct dfuse_nv_ll * next;
+};
+
 FILE *debug_fd( void );
 
 #ifdef DEBUG
@@ -78,6 +85,9 @@ FILE *debug_fd( void );
 #define MYSQLDB options.database
 
 #define MAX_SQL_LENGTH 1500
+
+//Doesn't like 'A', prefers 'a'.  Makes the algorithm faster.
+#define FROM_HEX(nbl) (((nbl)-'0')%('a'-'0'-10))
 
 /** macro to define options */
 #define DFUSE_OPT_KEY(t, p, v) { t, offsetof(struct options, p), v }
@@ -217,6 +227,61 @@ char *urlencode( const char *encodethis, unsigned long length )
     return rv;
 }
 
+struct string_length *htmldecode_n( const char *decodethis, struct string_length *rv_struct, unsigned long maxi )
+{
+    unsigned long i, rvptr = 0;
+    char *rv;
+
+    if ( !rv_struct || !rv_struct->string || !decodethis || maxi < 0 ) //We explicitly *do* handle zero-length strings.
+    {
+        return NULL;
+    }
+
+    if ( maxi >= MAX_STRING_LENGTH )
+    {
+        //Arguably should die here.
+        return NULL;
+    }
+
+    rv = rv_struct->string;
+
+    for ( i = 0; i <= maxi; i++ )
+    {
+        if ( decodethis[i] != '&' )
+        {
+	    rv[rvptr++] = decodethis[i];
+	    continue;
+	}
+
+	if ( decodethis[i+1] != 'x' )
+	{
+	    D( "Failed 'x' assert at i=%ld.", i );
+	    return NULL;
+	}
+
+	if ( decodethis[i+4] != ';' )
+	{
+	    D( "Failed ';' assert at i=%ld.", i );
+	    return NULL;
+	}
+
+	rv[rvptr++] = (FROM_HEX(decodethis[i+2])<<4) + FROM_HEX(decodethis[i+3]);
+
+	i += 4;
+
+	if ( rvptr >= MAX_STRING_LENGTH ) // This can never happen, since rvptr is always <= strlen(decodethis), but meh
+	{
+	    return NULL;
+	}
+    }
+
+    rv[rvptr] = '\0';
+
+    rv_struct->length = rvptr;
+
+    return rv_struct;
+}
+
 char *htmlencode( const char *encodethis, unsigned long length )
 {
     unsigned long i, rvptr = 0;
@@ -271,9 +336,6 @@ char *htmlencode( const char *encodethis, unsigned long length )
     return rv;
 }
 
-//Doesn't like 'A', prefers 'a'.  Makes the algorithm faster.
-#define FROM_HEX(nbl) (((nbl)-'0')%('a'-'0'-10))
-
 /*
  * Doesn't handle some old-style silliness (like +), but meh.  The real trick
  * here is that, since I control what gets generated as a name in the first
@@ -293,7 +355,11 @@ struct string_length *urldecode( const char *decodethis )
     char *rv;
     struct string_length * rv_struct = NULL;
 
-    if ( !decodethis || !strlen(decodethis) )
+    /*
+     * Zero-length strings freak me out here, but there's no reason to refuse to decode them
+     * that I can think of.  Convince me otherwise.
+     */
+    if ( !decodethis )
     {
 	return NULL;
     }
@@ -393,7 +459,7 @@ char * dfuse_jsonify_row( MYSQL_ROW *sql_row, MYSQL_RES *sql_res, char *prikey, 
 	return NULL;
     }
 
-    if ( !( encoded_prikey = htmlencode(prikey, prikey_len) ) ) //TODO: Doesn't handle NULLs in prikey gracefully
+    if ( !( encoded_prikey = htmlencode(prikey, prikey_len) ) )
     {
 	return NULL;
     }
@@ -529,6 +595,348 @@ char * dfuse_jsonify_row( MYSQL_ROW *sql_row, MYSQL_RES *sql_res, char *prikey, 
 
     $rv .= "\t}\n}";
 */
+}
+
+
+struct dfuse_nv_ll * new_nvll( void )
+{
+    struct dfuse_nv_ll *rv;
+
+    if ( !( rv = DFUSE_MALLOC( sizeof( struct dfuse_nv_ll ) ) ) )
+    {
+	return NULL;
+    }
+
+    rv->name = NULL;
+    rv->nvll_value = NULL;
+    rv->value = NULL;
+    rv->next = NULL;
+
+    return rv;
+}
+
+void free_nvll( struct dfuse_nv_ll *root )
+{
+    if ( !root )
+    {
+	return;
+    }
+
+    if ( root->name ) { DFUSE_FREE(root->name); }
+    if ( root->value ) { DFUSE_FREE(root->value); }
+    if ( root->nvll_value ) { free_nvll( root->nvll_value ); }
+    if ( root->next ) { free_nvll( root->next ); }
+
+    DFUSE_FREE( root );
+}
+
+#define so_sl sizeof( struct string_length )
+
+/*
+ * Parses some JSON into an array for you.
+ *
+ * @param json The string to parse.  Must be complete and valid JSON, and cannot omit the
+ *   root {} (that said, it might actually work, but I can't promise anything).
+ * @param recursed If it is non-null, we will return as soon as paren_deep <= 0 and set the
+ *   unsigned long to which it points to the number of characters we disgested (intended
+ *   for internal use; by default, we error out when the json is invalid, and this test is
+ *   one of the ways we know that it is.
+ *
+ * @returns A linked list, next == null on the last element.
+ */
+struct dfuse_nv_ll * dfuse_parse_json( char *json, unsigned long *recursed )
+{
+    struct dfuse_nv_ll *rootnvll = NULL;
+    struct dfuse_nv_ll *thisnvll = NULL;
+
+    unsigned long i;
+    unsigned long chars;
+    unsigned long toallocate;
+    int paren_deep = 0;
+
+    short int gotaname = 0;
+
+    char *decodedval;
+    struct string_length *decodedsl;
+
+    if ( !json )
+    {
+	D( "Null json with recursed='%p'.", recursed );
+	return NULL;
+    }
+
+    // We'll do this inside the loop, instead.  Might be faster to do it here, though.  Feel
+    // free to benchmark both approaches.
+/*    if ( strlen(json) > MAX_STRING_LENGTH )
+    {
+	return NULL;
+    }*/
+
+    for ( i = 0; json[i] != '\0'; i++ )
+    {
+	D( "\nParsing '%c'.\n", json[i] );
+
+	switch( json[i] )
+	{
+	    case ' ':
+	    case '\t':
+	    case '\n':
+	    case '\r':
+	    case ',': //We skip it; arguably, we should parse through it, but that really only adds an extra error check.
+	    case ':': //As above.
+		continue;
+	    case '"':
+		if ( !rootnvll || !thisnvll )
+		{
+		    D( "Reading a string without any rootnvll and/or thisnvll.  Dying at %d.", __LINE__ );
+		    return NULL;
+		}
+
+		// Read until endquote, this is our name if name==null, our value otherwise.
+		// If it's a value, when done reading it, set name=null.
+		toallocate=1; //sizeof("") = 1 due to '\0'.
+
+		for ( chars = 1; json[i+chars] != '"'; chars++ )
+		{
+		    toallocate++;
+
+		    if ( json[i+chars] == '\0' )
+		    {
+			D( "Unexpected null while reading nameval at pos %ld.", i+chars );
+			free_nvll( rootnvll );
+			return NULL;
+		    }
+
+		    if ( json[i+chars] == '&' )
+		    {
+			if ( json[i+chars+1] != 'x'
+			  || json[i+chars+4] != ';' )
+			{
+			    D( "Bad '&' at position %ld.", i+chars );
+			    free_nvll( rootnvll );
+			    return NULL;
+			}
+
+			D( "Read an entity at i=%ld.", i );
+
+			chars += 4; // skip this character and the next four.
+			continue;
+		    }
+		}
+
+		if ( !( decodedsl = DFUSE_MALLOC(sizeof(decodedsl)) ) )
+		{
+		    D( "Failed to allocate %ld bytes for decodedsl.", sizeof(decodedsl) );
+		    free_nvll(rootnvll);
+		    return NULL;
+		}
+
+		if ( !( decodedval = DFUSE_MALLOC(toallocate) ) )
+		{
+		    D( "Failed to allocate %ld bytes for toallocate.", toallocate );
+		    free_nvll(rootnvll);
+		    DFUSE_FREE(decodedsl);
+		    return NULL;
+		}
+
+		decodedsl->string = decodedval;
+		decodedsl->length = 0;
+
+		if ( !htmldecode_n( json+i+1, decodedsl, chars-2 ) )
+		{
+		    D( "Failed to htmldecode at line %d.", __LINE__ );
+		    free_nvll(rootnvll);
+		    DFUSE_FREE(decodedval);
+		    DFUSE_FREE(decodedsl);
+		    return NULL;
+		}
+
+		// -1 for the '\0'
+		if ( (toallocate-1) != decodedsl->length )
+		{
+		    D( "Assert failed; my size estimation was wrong!  They differ by %ld.", toallocate-1-decodedsl->length );
+		    free_nvll(rootnvll);
+		    DFUSE_FREE(decodedval);
+		    DFUSE_FREE(decodedsl);
+		    return NULL;
+		}
+
+		if ( gotaname )
+		{
+		    if ( !( thisnvll->value = DFUSE_MALLOC( sizeof( thisnvll->value ) ) ) )
+		    {
+			D( "Failed to malloc for the value stringlength at i=%ld.", i );
+			free_nvll(rootnvll);
+		        DFUSE_FREE(decodedval);
+		        DFUSE_FREE(decodedsl);
+			return NULL;
+		    }
+
+		    thisnvll->value->length = toallocate-1;
+		    thisnvll->value->string = decodedsl->string;
+
+		    DFUSE_FREE( decodedsl );
+
+		    gotaname = 0;
+		}
+		else
+		{
+		    struct dfuse_nv_ll *lastnvll = thisnvll;
+
+		    if ( !( thisnvll = new_nvll() ) )
+		    {
+			D( "Failed to malloc for new thisnvll at %d.", __LINE__ );
+			free_nvll(rootnvll);
+			DFUSE_FREE(decodedval);
+			DFUSE_FREE(decodedsl);
+			return NULL;
+		    }
+
+		    lastnvll->next = thisnvll;
+
+		    if ( !( thisnvll->name = DFUSE_MALLOC( sizeof( thisnvll->name ) ) ) )
+		    {
+			D( "Failed to malloc for the name stringlength at i=%ld.", i );
+			free_nvll(rootnvll);
+		        DFUSE_FREE(decodedval);
+		        DFUSE_FREE(decodedsl);
+			return NULL;
+		    }
+
+		    thisnvll->name->length = toallocate-1;
+		    thisnvll->name->string = decodedsl->string;
+
+		    DFUSE_FREE( decodedsl );
+
+		    gotaname = 1;
+		}
+
+		i += chars;
+		break;
+	    case '{':
+		paren_deep++;
+
+		if ( !rootnvll )
+		{
+		    if ( paren_deep > 1 )
+		    {
+			D( "Things that should never happen, part 6(b), subsection %d.", __LINE__ );
+			return NULL;
+		    }
+		    //Root brace.  Or misformatted JSON.  Either way, don't get too worked up over it.
+		    if ( !( rootnvll = thisnvll = new_nvll() ) )
+		    {
+			D( "Bailing due to inability to set rootnvll to newnvll at %d.", __LINE__ );
+			return NULL;
+		    }
+		    continue;
+		}
+
+		if ( !gotaname || !thisnvll->name )
+		{
+		    D( "Things that should never happen, part 6(b), subsection %d.", __LINE__ );
+		    free_nvll( rootnvll );
+		    return NULL;
+		}
+
+		if ( thisnvll->value )
+		{
+		    D( "Things that should never happen, part 6(b), subsection %d.", __LINE__ );
+		    free_nvll( rootnvll );
+		    return NULL;
+		}
+
+		if ( !( thisnvll->nvll_value = dfuse_parse_json( json+i, &chars ) ) )
+		{
+		    D( "Things that should never happen, part 6(b), subsection %d.", __LINE__ );
+		    free_nvll( rootnvll );
+		    return NULL;
+		}
+
+		i += chars-1; //We want to be handed back the location of the next }, as we've incremented paren_deep.
+
+		break;
+	    case '}':
+		paren_deep--;
+
+		if ( !recursed && paren_deep < 0 )
+		{
+		    D( "The JSON dwarves delved too deep: %d!", __LINE__ );
+		    free_nvll( rootnvll );
+		    return NULL;
+		}
+
+		if ( recursed && paren_deep == 0 )
+		{
+		    D( "Found the bottom of my stack.  Returning at i=%ld.", i );
+		    *recursed = i;
+		    return rootnvll;
+		}
+
+		break;
+	    //TODO: Dies on nulls at the moment.  Fix that.
+	    default:
+		D( "Unhandled character '%c' in json input.  Bailing.\n", json[i] );
+		return NULL;
+	}
+    } 
+
+    if ( paren_deep != 0 )
+    {
+	D( "Parse error: paren_deep is %d (and should be zero).  Bailing.", paren_deep );
+	free_nvll( rootnvll );
+	return NULL;
+    }
+
+    D( "All's well: returning '%p'.", rootnvll );
+    D( "Total characters parsed: %ld.", i );
+
+    return rootnvll;
+}
+
+void print_nvll( struct dfuse_nv_ll *rootnvll, unsigned long deep )
+{
+    struct dfuse_nv_ll *thisnvll;
+    int i;
+
+    if ( !rootnvll )
+    {
+	D( "Bailing early; asked to print an empty nvll at deep=%ld.", deep );
+	return;
+    }
+
+    for ( i = 0; i < deep; i++ ) { printf( "\t", i, deep ); }
+
+    printf( "{\n" );
+
+    for ( thisnvll = rootnvll; thisnvll; thisnvll = thisnvll->next )
+    {
+	if ( thisnvll->name )
+	{
+	    for ( i = 0; i < deep; i++ ) { printf( "\t" ); }
+
+	    //Blatantly not null-safe, but this is intended as a debugging function.
+	    printf( "%s: ", thisnvll->name->string );
+
+	    if ( thisnvll->nvll_value )
+	    {
+		print_nvll( thisnvll->nvll_value, deep+1 );
+	    }
+	    else if ( thisnvll->value )
+	    {
+		//Blatantly not null-safe, but this is intended as a debugging function.
+		printf( "\"%s\",\n", thisnvll->value->string );
+	    }
+	    else
+	    {
+		printf( "null,\n" );
+	    }
+	}
+    }
+
+    for ( i = 0; i < deep; i++ ) { printf( "\t" ); }
+
+    printf( "}\n" );
 }
 
 static int dfuse_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
@@ -737,7 +1145,7 @@ static int dfuse_getattr(const char *path, struct stat *stbuf)
 
 	if ( json )
 	{
-	    char * jsonified = dfuse_jsonify_row( &sql_row, sql_res, url_path, strlen(url_path) );
+	    char * jsonified = dfuse_jsonify_row( &sql_row, sql_res, url_path, url_path_struct->length);
 	    //Blatant opportunity for caching/optimization.
 
 	    if ( !jsonified )
@@ -751,7 +1159,7 @@ static int dfuse_getattr(const char *path, struct stat *stbuf)
 
 	    D("Got a jsonified string: '%s'.\n", jsonified);
 
-	    D("Looks to be about %d long.\n", strlen(jsonified));
+	    D("Looks to be about %ld long.\n", strlen(jsonified));
 
 	    stbuf->st_size = strlen(jsonified);
 
@@ -1171,6 +1579,18 @@ int main(int argc, char *argv[])
     char *clean_table, *clean_prikey, *clean_columns;
     MYSQL *sql;
 #endif
+
+		/* { "foo": { "bar": "baz", "boo": "boz" } } */
+    char * foo = "{ \"foo\": { \"bar&x36;\": \"&x34;baz\", \"&x35;boo&x33;\": \"bo&x32;z\" } }";
+//    char * foo = "{\n     \"firstName\": \"John\",\n     \"lastName\": \"Smith\",\n     \"age\": \"&x32;5\",\n     \"address\":\n     {\n         \"streetAddress\": \"21 2nd Street\",\n         \"city\": \"New York\",\n         \"state\": \"NY\",\n         \"postalCode\": \"10021\"\n     },\n     \"phoneNumber\":\n     {\n         \"home\": {\n           \"type\": \"home\",\n           \"number\": \"212 555-1234\"\n         },\n         \"fax\": {\n           \"type\": \"fax\",\n           \"number\": \"646 555-4567\"\n         }\n     }\n }\n";
+    struct dfuse_nv_ll * somenvll;
+
+    somenvll = dfuse_parse_json( foo, NULL );
+
+    print_nvll( somenvll, 0 );
+
+    exit( 0 );
+
 
 //    printf( "Starting...\n" );
 
