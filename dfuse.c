@@ -644,7 +644,7 @@ void free_nvll( struct dfuse_nv_ll *root )
  *
  * @returns A linked list, next == null on the last element.
  */
-struct dfuse_nv_ll * dfuse_parse_json( char *json, unsigned long *recursed )
+struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned long *recursed )
 {
     struct dfuse_nv_ll *rootnvll = NULL;
     struct dfuse_nv_ll *thisnvll = NULL;
@@ -672,7 +672,7 @@ struct dfuse_nv_ll * dfuse_parse_json( char *json, unsigned long *recursed )
 	return NULL;
     }*/
 
-    for ( i = 0; json[i] != '\0'; i++ )
+    for ( i = 0; json[i] != '\0' && i < size; i++ )
     {
 	D( "\nParsing '%c'.\n", json[i] );
 
@@ -846,7 +846,7 @@ struct dfuse_nv_ll * dfuse_parse_json( char *json, unsigned long *recursed )
 		    return NULL;
 		}
 
-		if ( !( thisnvll->nvll_value = dfuse_parse_json( json+i, &chars ) ) )
+		if ( !( thisnvll->nvll_value = dfuse_parse_json( json+i, size-i, &chars ) ) )
 		{
 		    D( "Things that should never happen, part 6(b), subsection %d.", __LINE__ );
 		    free_nvll( rootnvll );
@@ -1325,6 +1325,15 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
     struct string_length *url_path_struct;
     char *url_path, *clean_path;
 
+//    if((fi->flags & 3) != O_RDONLY)
+    // We don't allow creation of new files at the moment.  That said, blocking O_CREAT
+    // is actually far too restrictive.  We'll fix this later (TODO).  Also, according to
+    // the API docs, O_CREAT never actually gets passed.  So meh.
+    if ( !( fi->flags & O_RDONLY || ( fi->flags & O_WRONLY && !(fi->flags & O_CREAT) ) ) )
+    {
+	DFRV(-EACCES);
+    }
+
     if ( !(sql = dfuse_connect( NULL, NULL, NULL, NULL ) ) )
     {
 	DFRV(-EIO);
@@ -1379,6 +1388,7 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
     switch( qr )
     {
 	case CR_COMMANDS_OUT_OF_SYNC:
+	    DFRV(-EDEADLK);
 	case CR_SERVER_GONE_ERROR:
 	case CR_SERVER_LOST:
 	case CR_UNKNOWN_ERROR:
@@ -1404,17 +1414,149 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
 
     mysql_free_result( sql_res );
 
-    if((fi->flags & 3) != O_RDONLY)
-	DFRV(-EACCES);
-
     DFRV(0);
+}
+
+static int dfuse_write(const char *path, const char *buf, size_t size, off_t offset,
+			struct fuse_file_info *fi)
+{
+    size_t len;
+    MYSQL *sql;
+    MYSQL_RES *sql_res;
+    MYSQL_ROW sql_row;
+    int qr;
+    char sqlbuf[2000];
+    struct string_length *url_path_struct;
+    char *url_path, *clean_path, *clean_var;
+    char *rv;
+    struct dfuse_nv_ll *rootnvll = NULL;
+
+    //We don't do any buffering quite yet, so write it all at once or not at all.
+    if ( size <= 0 || offset != 0 )
+    {
+	DFRV(-EFAULT);
+    }
+
+    //TODO: Refactor; this is literally a C&P from dfuse_read
+    if ( !(sql = dfuse_connect( NULL, NULL, NULL, NULL ) ) )
+    {
+	DFRV(-EIO);
+    }
+
+    if ( !path || path[0] == '\0' )
+    {
+	DFRV(-ENOENT);
+    }
+
+    if ( !(url_path_struct = urldecode(path+sizeof(char)) ) )
+    {
+	DFRV(-ENOMEM);
+    }
+
+    url_path = url_path_struct->string;
+
+    if ( !( clean_path = DFUSE_MALLOC((url_path_struct->length)*2+1) ) )
+    {
+	DFUSE_FREE(url_path);
+	DFUSE_FREE(url_path_struct);
+	DFRV(-ENOMEM);
+    }
+
+    mysql_real_escape_string( sql, clean_path, url_path, url_path_struct->length );
+
+    if ( strlen(clean_path) <= 0 )
+    {
+	DFUSE_FREE(url_path);
+	DFUSE_FREE(url_path_struct);
+	DFUSE_FREE(clean_path);
+	DFRV(-ENOENT);
+    }
+
+    if ( 0 > snprintf( sqlbuf, MAX_SQL_LENGTH, "SELECT %s FROM %s WHERE %s='%s'", options.columns, options.table, options.prikey, clean_path) )
+    {
+	DFUSE_FREE(url_path);
+	DFUSE_FREE(url_path_struct);
+	DFUSE_FREE(clean_path);
+	DFRV(-EIO);
+    }
+
+    qr = mysql_query( sql, sqlbuf );
+
+    switch( qr )
+    {
+	case CR_COMMANDS_OUT_OF_SYNC:
+	case CR_SERVER_GONE_ERROR:
+	case CR_SERVER_LOST:
+	case CR_UNKNOWN_ERROR:
+	default:
+	    DFUSE_FREE(url_path);
+	    DFUSE_FREE(url_path_struct);
+	    DFUSE_FREE(clean_path);
+
+	    DFRV(-EIO);
+	case 0:
+	    break;
+    }
+
+    if ( !( rootnvll = dfuse_parse_json( buf, size, NULL ) ) )
+    {
+	DFUSE_FREE(url_path);
+	DFUSE_FREE(url_path_struct);
+	DFUSE_FREE(clean_path);
+
+	DFRV(-EIO);
+    }
+
+    D("Got an UPDATE: UPDATE `%s` SET %s.\n", forge_update(rootnvll));
+
+    return size;
+}
+
+char * forge_update( struct dfuse_nv_ll * rootnvll )
+{
+    struct dfuse_nv_ll * thisnvll;
+    char *rv, clean_name, clean_val;
+
+    rv = malloc(16384); //TODO: Blatant security hole
+    rv[0] = '\0';
+
+    for ( thisnvll = rootnvll; thisnvll; thisnvll = thisnvll->next )
+    {
+	if ( thisnvll->nvll_value )
+	{
+	    if ( rv[0] == '\0' )
+	    {
+		sprintf( rv, "%s", forge_update(thisnvll) ); //No need to %s%s here; rv[0] is null!
+	    }
+	    else
+	    {
+		D( "This should never happen with DFuse-generated JSON: got deeply-nested JSON with rv so far='%s'.", rv );
+		sprintf( rv, "%s, %s", rv, forge_update(thisnvll) );
+	    }
+	}
+	else if ( thisnvll->name && thisnvll->value )
+	{
+	    if ( rv[0] == '\0' )
+	    {
+		//TODO: blatantly not NULL-safe.
+		sprintf( rv, "`%s`='%s'", thisnvll->name->string, thisnvll->value->string );
+	    }
+	    else
+	    {
+		//TODO: blatantly not NULL-safe.
+		sprintf( rv, ", `%s`='%s'", thisnvll->name->string, thisnvll->value->string );
+	    }
+	}
+    }
+
+    return rv;
 }
 
 static int dfuse_read(const char *path, char *buf, size_t size, off_t offset,
 			struct fuse_file_info *fi)
 {
     size_t len;
-    (void) fi;
+//    (void) fi;
     MYSQL *sql;
     MYSQL_RES *sql_res;
     MYSQL_ROW sql_row;
@@ -1568,6 +1710,7 @@ static struct fuse_operations dfuse_oper = {
     .readdir = dfuse_readdir,
     .open = dfuse_open,
     .read = dfuse_read,
+    .write = dfuse_write,
     .readlink = dfuse_readlink,
 };
 
@@ -1580,6 +1723,7 @@ int main(int argc, char *argv[])
     MYSQL *sql;
 #endif
 
+#if 0
 		/* { "foo": { "bar": "baz", "boo": "boz" } } */
     char * foo = "{ \"foo\": { \"bar&x36;\": \"&x34;baz\", \"&x35;boo&x33;\": \"bo&x32;z\" } }";
 //    char * foo = "{\n     \"firstName\": \"John\",\n     \"lastName\": \"Smith\",\n     \"age\": \"&x32;5\",\n     \"address\":\n     {\n         \"streetAddress\": \"21 2nd Street\",\n         \"city\": \"New York\",\n         \"state\": \"NY\",\n         \"postalCode\": \"10021\"\n     },\n     \"phoneNumber\":\n     {\n         \"home\": {\n           \"type\": \"home\",\n           \"number\": \"212 555-1234\"\n         },\n         \"fax\": {\n           \"type\": \"fax\",\n           \"number\": \"646 555-4567\"\n         }\n     }\n }\n";
@@ -1590,6 +1734,7 @@ int main(int argc, char *argv[])
     print_nvll( somenvll, 0 );
 
     exit( 0 );
+#endif
 
 
 //    printf( "Starting...\n" );
