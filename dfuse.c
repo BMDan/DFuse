@@ -8,7 +8,7 @@
  * DFUSE, (C) Dan Reif, Miklos Szeredi, and others, based on the Hello FS template by Miklos
  * Szeredi <miklos@szeredi.hu>.  This code and any resultant executables or libraries are
  * governed by the terms of the GPL published by the GNU project of the Free Software
- * Foundation, either version 2, or (at your option) the latest version available at at
+ * Foundation, either version 2, or (at your option) the latest version available at
  * www.gnu.org at the time of its use or modification.
  */
 
