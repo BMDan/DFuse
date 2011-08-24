@@ -63,7 +63,7 @@ struct string_length {
 
 struct dfuse_nv_ll {
     struct string_length * name;
-    struct string_length * value; 
+    struct string_length * value;
     struct dfuse_nv_ll * nvll_value;
     struct dfuse_nv_ll * next;
 };
@@ -231,6 +231,8 @@ struct string_length *htmldecode_n( const char *decodethis, struct string_length
 {
     unsigned long i, rvptr = 0;
     char *rv;
+
+    D( "Decoding '%s'.\n", decodethis );
 
     if ( !rv_struct || !rv_struct->string || !decodethis || maxi < 0 ) //We explicitly *do* handle zero-length strings.
     {
@@ -431,9 +433,9 @@ char * dfuse_jsonify_row( MYSQL_ROW *sql_row, MYSQL_RES *sql_res, char *prikey, 
     unsigned long long jsonified_length = 0;
     static char jsonify_prepri[] = "{\n\t\"";
     static char jsonify_postpri[] = "\": {\n";
-    static char jsonify_prerow[] = "\t";
-    static char jsonify_midrow[] = ": \"";
-    static char jsonify_midrow_nq[] = ": ";
+    static char jsonify_prerow[] = "\t\"";
+    static char jsonify_midrow[] = "\": \"";
+    static char jsonify_midrow_nq[] = "\": ";
     static char jsonify_postrow[] = "\",\n";
     static char jsonify_postrow_nq[] = ",\n";
     static char jsonify_end[] = "\t}\n}";
@@ -742,8 +744,13 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 		decodedsl->string = decodedval;
 		decodedsl->length = 0;
 
-		if ( !htmldecode_n( json+i+1, decodedsl, chars-2 ) )
+		if ( chars == 1 ) //In other words, if the first character we hit was a "...
 		{
+			decodedsl->string[0] = '\0';
+		}
+		else if ( !htmldecode_n( json+i+1, decodedsl, chars-2 ) )
+		{
+		    D( "Chars = %ld", chars );
 		    D( "Failed to htmldecode at line %d.", __LINE__ );
 		    free_nvll(rootnvll);
 		    DFUSE_FREE(decodedval);
@@ -879,7 +886,7 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 		D( "Unhandled character '%c' in json input.  Bailing.\n", json[i] );
 		return NULL;
 	}
-    } 
+    }
 
     if ( paren_deep != 0 )
     {
@@ -1025,7 +1032,7 @@ static int dfuse_getattr(const char *path, struct stat *stbuf)
 	stbuf->st_nlink = 2;
     }
     else {
-	stbuf->st_mode = S_IFREG | 0444;
+	stbuf->st_mode = S_IFREG | 0644;
 	stbuf->st_nlink = 1;
 
 	if ( !(url_path_struct = urldecode(path+sizeof(char)) ) )
@@ -1163,7 +1170,7 @@ static int dfuse_getattr(const char *path, struct stat *stbuf)
 
 	    stbuf->st_size = strlen(jsonified);
 
-	    D("It's %lld long.\n", stbuf->st_size);
+	    D("It's %ld long.\n", stbuf->st_size);
 
 	    DFUSE_FREE( jsonified );
 	}
@@ -1210,6 +1217,11 @@ static int dfuse_getattr(const char *path, struct stat *stbuf)
 //    usleep( 10000 );
 
     DFRV(0);
+}
+
+static int dfuse_fgetattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
+{
+    return dfuse_getattr(path,stbuf);
 }
 
 MYSQL *dfuse_connect( char *host, char *user, char *pass, char *defaultdb )
@@ -1325,14 +1337,10 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
     struct string_length *url_path_struct;
     char *url_path, *clean_path;
 
-//    if((fi->flags & 3) != O_RDONLY)
-    // We don't allow creation of new files at the moment.  That said, blocking O_CREAT
-    // is actually far too restrictive.  We'll fix this later (TODO).  Also, according to
-    // the API docs, O_CREAT never actually gets passed.  So meh.
-    if ( !( fi->flags & O_RDONLY || ( fi->flags & O_WRONLY && !(fi->flags & O_CREAT) ) ) )
-    {
-	DFRV(-EACCES);
-    }
+    D( "Asked to open '%s'.", path );
+
+    // The O_ACCMODE dance is needed because O_RDONLY is 0x0.  @#&$*
+//    if((fi->flags & O_ACCMODE) != O_RDONLY)
 
     if ( !(sql = dfuse_connect( NULL, NULL, NULL, NULL ) ) )
     {
@@ -1383,6 +1391,8 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
     DFUSE_FREE(url_path_struct);
     DFUSE_FREE(clean_path);
 
+    D( "Running SQL: '%s'.", sqlbuf );
+
     qr = mysql_query( sql, sqlbuf );
 
     switch( qr )
@@ -1415,6 +1425,61 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
     mysql_free_result( sql_res );
 
     DFRV(0);
+}
+
+char * forge_update( struct dfuse_nv_ll * rootnvll )
+{
+    struct dfuse_nv_ll * thisnvll;
+    char *rv, clean_name, clean_val;
+
+    rv = malloc(16384); //TODO: Blatant security hole
+    rv[0] = '\0';
+
+    for ( thisnvll = rootnvll; thisnvll; thisnvll = thisnvll->next )
+    {
+	if ( thisnvll->nvll_value )
+	{
+	    if ( rv[0] == '\0' )
+	    {
+		sprintf( rv, "%s", forge_update(thisnvll->nvll_value) ); //No need to %s%s here; rv[0] is null!
+	    }
+	    else
+	    {
+		D( "This should never happen with DFuse-generated JSON: got deeply-nested JSON with rv so far='%s'.", rv );
+		sprintf( rv, "%s, %s", rv, forge_update(thisnvll->nvll_value) );
+	    }
+	}
+	else if ( thisnvll->name && thisnvll->value )
+	{
+	    if ( rv[0] == '\0' )
+	    {
+		//TODO: blatantly not NULL-safe.
+		sprintf( rv, "`%s`='%s'", thisnvll->name->string, thisnvll->value->string );
+	    }
+	    else
+	    {
+		//TODO: blatantly not NULL-safe.
+		sprintf( rv, "%s, `%s`='%s'", rv, thisnvll->name->string, thisnvll->value->string );
+	    }
+	}
+    }
+
+    return rv;
+}
+
+static int dfuse_flush(const char *path, struct fuse_file_info *fi)
+{
+    return 0;
+}
+
+static int dfuse_create(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+    return 0;
+}
+
+static int dfuse_truncate(const char *path, off_t offset)
+{
+    return 0;
 }
 
 static int dfuse_write(const char *path, const char *buf, size_t size, off_t offset,
@@ -1476,6 +1541,8 @@ static int dfuse_write(const char *path, const char *buf, size_t size, off_t off
 	DFRV(-EIO);
     }
 
+    D( "Querying: '%s'.\n", sqlbuf );
+
     qr = mysql_query( sql, sqlbuf );
 
     switch( qr )
@@ -1503,49 +1570,10 @@ static int dfuse_write(const char *path, const char *buf, size_t size, off_t off
 	DFRV(-EIO);
     }
 
-    D("Got an UPDATE: UPDATE `%s` SET %s.\n", forge_update(rootnvll));
+    D("Got an UPDATE: UPDATE `%s`", clean_path);
+    D(" SET %s.\n", forge_update(rootnvll));
 
     return size;
-}
-
-char * forge_update( struct dfuse_nv_ll * rootnvll )
-{
-    struct dfuse_nv_ll * thisnvll;
-    char *rv, clean_name, clean_val;
-
-    rv = malloc(16384); //TODO: Blatant security hole
-    rv[0] = '\0';
-
-    for ( thisnvll = rootnvll; thisnvll; thisnvll = thisnvll->next )
-    {
-	if ( thisnvll->nvll_value )
-	{
-	    if ( rv[0] == '\0' )
-	    {
-		sprintf( rv, "%s", forge_update(thisnvll) ); //No need to %s%s here; rv[0] is null!
-	    }
-	    else
-	    {
-		D( "This should never happen with DFuse-generated JSON: got deeply-nested JSON with rv so far='%s'.", rv );
-		sprintf( rv, "%s, %s", rv, forge_update(thisnvll) );
-	    }
-	}
-	else if ( thisnvll->name && thisnvll->value )
-	{
-	    if ( rv[0] == '\0' )
-	    {
-		//TODO: blatantly not NULL-safe.
-		sprintf( rv, "`%s`='%s'", thisnvll->name->string, thisnvll->value->string );
-	    }
-	    else
-	    {
-		//TODO: blatantly not NULL-safe.
-		sprintf( rv, ", `%s`='%s'", thisnvll->name->string, thisnvll->value->string );
-	    }
-	}
-    }
-
-    return rv;
 }
 
 static int dfuse_read(const char *path, char *buf, size_t size, off_t offset,
@@ -1703,10 +1731,14 @@ static int dfuse_read(const char *path, char *buf, size_t size, off_t offset,
 
 static struct fuse_operations dfuse_oper = {
     .getattr = dfuse_getattr,
+    .fgetattr = dfuse_fgetattr,
     .readdir = dfuse_readdir,
     .open = dfuse_open,
     .read = dfuse_read,
     .write = dfuse_write,
+    .flush = dfuse_flush,
+    .create = dfuse_create,
+    .truncate = dfuse_truncate,
     .readlink = dfuse_readlink,
 };
 
