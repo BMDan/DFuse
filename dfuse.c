@@ -905,7 +905,7 @@ void print_nvll( struct dfuse_nv_ll *rootnvll, unsigned long deep )
 	return;
     }
 
-    for ( i = 0; i < deep; i++ ) { printf( "\t", i, deep ); }
+    for ( i = 0; i < deep; i++ ) { printf( "\t" ); }
 
     printf( "{\n" );
 
@@ -1420,15 +1420,11 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
 static int dfuse_write(const char *path, const char *buf, size_t size, off_t offset,
 			struct fuse_file_info *fi)
 {
-    size_t len;
     MYSQL *sql;
-    MYSQL_RES *sql_res;
-    MYSQL_ROW sql_row;
     int qr;
     char sqlbuf[2000];
     struct string_length *url_path_struct;
-    char *url_path, *clean_path, *clean_var;
-    char *rv;
+    char *url_path, *clean_path;
     struct dfuse_nv_ll *rootnvll = NULL;
 
     //We don't do any buffering quite yet, so write it all at once or not at all.
