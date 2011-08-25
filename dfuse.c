@@ -1430,36 +1430,88 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
 char * forge_update( struct dfuse_nv_ll * rootnvll )
 {
     struct dfuse_nv_ll * thisnvll;
-    char *rv, clean_name, clean_val;
+    char *rv, *rv_int, *clean_name, *clean_val;
+    unsigned long sizeofrv = 0;
+    const char update_intercolumn[] = ", ";
+    const char update_preset[] = "`";
+    const char update_midset[] = "`='";
+    const char update_postset[] = "'";
 
-    rv = malloc(16384); //TODO: Blatant security hole
-    rv[0] = '\0';
+    sizeofrv = 1;
+    rv = malloc(sizeofrv);
+    (rv)[0] = '\0';
+
+    D( "Commencing forge run with rootnvll=%p.\n", rootnvll );
 
     for ( thisnvll = rootnvll; thisnvll; thisnvll = thisnvll->next )
     {
+	D( "Forging loop with thisnvll=%p.\n", thisnvll );
 	if ( thisnvll->nvll_value )
 	{
-	    if ( rv[0] == '\0' )
+	    if ( (rv)[0] == '\0' )
 	    {
-		sprintf( rv, "%s", forge_update(thisnvll->nvll_value) ); //No need to %s%s here; rv[0] is null!
+		D( "[Empty rv] Forging a new one from %ld.\n", sizeofrv );
+		free(rv);
+		if ( !( rv = forge_update(thisnvll->nvll_value) ) )
+		{
+		    D( "Failed to forge_update with a blank rv at %d.", __LINE__ );
+		    return NULL;
+		}
+		sizeofrv += strlen(rv);
+		D( "[Empty rv] New sizeofrv is %ld.\n", sizeofrv );
 	    }
 	    else
 	    {
 		D( "This should never happen with DFuse-generated JSON: got deeply-nested JSON with rv so far='%s'.", rv );
-		sprintf( rv, "%s, %s", rv, forge_update(thisnvll->nvll_value) );
+		rv_int = forge_update(thisnvll->nvll_value);
+		sizeofrv += strlen(update_intercolumn) + strlen(rv_int);
+		if ( !( rv = realloc( rv, sizeofrv ) ) )
+		{
+		    D( "Failed to realloc to %ld.", sizeofrv );
+		    free( rv );
+		    free( rv_int );
+		    return NULL;
+		}
+		sprintf( rv, "%s%s%s", rv, update_intercolumn, rv_int );
+		free( rv_int );
 	    }
 	}
 	else if ( thisnvll->name && thisnvll->value )
 	{
+	    D( "Found a \"real\" nvll with name='%s'.\n", thisnvll->name->string );
 	    if ( rv[0] == '\0' )
 	    {
+		D( "[real empty rv] former sizeofrv=%ld.\n", sizeofrv );
+		//I could free() then malloc(), but meh.
+		sizeofrv += strlen(update_preset) + thisnvll->name->length + strlen(update_midset) + thisnvll->value->length + strlen(update_postset);
+		D( "[real empty rv] subsequent sizeofrv=%ld.\n", sizeofrv );
+		if ( !( rv = realloc( rv, sizeofrv ) ) )
+		{
+		    D( "Failed to realloc rv to='%ld'.", sizeofrv );
+		    free( rv );
+		    return NULL;
+		}
 		//TODO: blatantly not NULL-safe.
-		sprintf( rv, "`%s`='%s'", thisnvll->name->string, thisnvll->value->string );
+		sprintf( rv, "%s%s%s%s%s", update_preset, thisnvll->name->string, update_midset, thisnvll->value->string, update_postset );
 	    }
 	    else
 	    {
+		D( "[extant real rv] entering with rv='%s'.\n", rv );
+		D( "[extant real rv] former sizeofrv=%ld.\n", sizeofrv );
+		D( "[extant real rv] claimed name length=%ld\n", thisnvll->name->length );
+		D( "[extant real rv] measured name length=%ld\n", strlen(thisnvll->name->string) );
+		D( "[extant real rv] claimed value length=%ld\n", thisnvll->value->length );
+		D( "[extant real rv] measured value length=%ld\n", strlen(thisnvll->value->string) );
+		sizeofrv += strlen(update_intercolumn) + strlen(update_preset) + thisnvll->name->length + strlen(update_midset) + thisnvll->value->length + strlen(update_postset);
+		D( "[extant real rv] subsequent sizeofrv=%ld.\n", sizeofrv );
+		if ( !( rv = realloc( rv, sizeofrv ) ) )
+		{
+		    D( "Failed to realloc existing rv to '%ld'.", sizeofrv );
+		    free( rv );
+		    return NULL;
+		}
 		//TODO: blatantly not NULL-safe.
-		sprintf( rv, "%s, `%s`='%s'", rv, thisnvll->name->string, thisnvll->value->string );
+		sprintf( rv, "%s%s%s%s%s%s%s", rv, update_intercolumn, update_preset, thisnvll->name->string, update_midset, thisnvll->value->string, update_postset );
 	    }
 	}
     }
@@ -1489,7 +1541,7 @@ static int dfuse_write(const char *path, const char *buf, size_t size, off_t off
     int qr;
     char sqlbuf[2000];
     struct string_length *url_path_struct;
-    char *url_path, *clean_path;
+    char *url_path, *clean_path, *update_string;
     struct dfuse_nv_ll *rootnvll = NULL;
 
     //We don't do any buffering quite yet, so write it all at once or not at all.
@@ -1570,8 +1622,10 @@ static int dfuse_write(const char *path, const char *buf, size_t size, off_t off
 	DFRV(-EIO);
     }
 
+    update_string = forge_update(rootnvll);
+
     D("Got an UPDATE: UPDATE `%s`", options.table);
-    D(" SET %s", forge_update(rootnvll));
+    D(" SET %s", update_string);
     D(" WHERE %s", options.prikey );
     D("='%s'\n", clean_path );
 
