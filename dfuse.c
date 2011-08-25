@@ -1570,8 +1570,10 @@ static int dfuse_write(const char *path, const char *buf, size_t size, off_t off
 	DFRV(-EIO);
     }
 
-    D("Got an UPDATE: UPDATE `%s`", clean_path);
-    D(" SET %s.\n", forge_update(rootnvll));
+    D("Got an UPDATE: UPDATE `%s`", options.table);
+    D(" SET %s", forge_update(rootnvll));
+    D(" WHERE %s", options.prikey );
+    D("='%s'\n", clean_path );
 
     return size;
 }
