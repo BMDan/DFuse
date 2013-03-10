@@ -5,12 +5,13 @@ MYSQL_HOST="1.2.3.4"
 MYSQL_USER="someuser"
 MYSQL_PASS="somepass"
 MYSQL_DB="somedb"
-AUTODIR=$(/bin/pwd)/autodirjson
+AUTODIRBASE=$(/bin/pwd)
+AUTODIR=$AUTODIRBASE/autodirjson
 
 ## You shouldn't have to modify anything below this line.
 
 export MYOPTS="-h $MYSQL_HOST -p$MYSQL_PASS -u $MYSQL_USER $MYSQL_DB"
-export FUSEOPTS="-H $MYSQL_HOST -p $MYSQL_PASS -u $MYSQL_USER -D $MYSQL_DB"
+export FUSEOPTS="-H $MYSQL_HOST -p $MYSQL_PASS -u $MYSQL_USER -D $MYSQL_DB -T 'UNIX_TIMESTAMP()'"
 
 for table in $(mysql $MYOPTS -e 'show tables' | sed '1d')
   do PRIKEY=$(mysql $MYOPTS -e 'show create table '$table'\G' | grep -F 'PRIMARY KEY')

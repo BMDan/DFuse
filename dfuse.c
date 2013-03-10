@@ -1,6 +1,5 @@
 /*
- * Code not otherwise copyrighted is Copyright (C) 2010-2011 Dan Reif/BlackMesh Managed Hosting.
- * This is version 0.4a.
+ * Code not otherwise copyrighted is Copyright (C) 2010-2013 Dan Reif
  * 
  * With the permission of Miklos Szeredi, the entirety of this file is exclusively licensed
  * under the GNU GPL, version 2 or later:
@@ -10,21 +9,6 @@
  * governed by the terms of the GPL published by the GNU project of the Free Software
  * Foundation, either version 2, or (at your option) the latest version available at
  * www.gnu.org at the time of its use or modification.
- */
-
-/*
- * CHANGELOG:
- * 0.1a djr@BM: Initial Alpha
- * 0.2a djr@BM: Fix crash on NULL data, add symlink representation of NULL, rename some functions.
- * 0.3a djr@BM: Added "--json" mode.
- * 0.3.1a djr@BM: Fixed a couple things that were bugging the hell out of me: embedded NULLs in
- *                primary keys now work properly, we test for successful DB connection at
- *                invocation (though I think I could do a better job of displaying the errors),
- *                and there was a bunch of extra bounds-checking added.  Oh, and put more stuff
- *                into #defines that belongs there instead of as magic numbers.
- * 0.3.2a djr@BM: Found and fixed a memory leak.
- * 0.3.3a djr@BM: Changed license to GPL v2+.
- * Subsequent versions: See https://github.com/bmdan/dfuse
  */
 
 #define FUSE_USE_VERSION 25
@@ -663,7 +647,7 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 
     if ( !json )
     {
-	D( "Null json with recursed='%p'.", recursed );
+	D( "Null json with recursed='%p'.\n", recursed );
 	return NULL;
     }
 
@@ -690,7 +674,7 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 	    case '"':
 		if ( !rootnvll || !thisnvll )
 		{
-		    D( "Reading a string without any rootnvll and/or thisnvll.  Dying at %d.", __LINE__ );
+		    D( "Reading a string without any rootnvll and/or thisnvll.  Dying at %d.\n", __LINE__ );
 		    return NULL;
 		}
 
@@ -704,7 +688,7 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 
 		    if ( json[i+chars] == '\0' )
 		    {
-			D( "Unexpected null while reading nameval at pos %ld.", i+chars );
+			D( "Unexpected null while reading nameval at pos %ld.\n", i+chars );
 			free_nvll( rootnvll );
 			return NULL;
 		    }
@@ -714,12 +698,13 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 			if ( json[i+chars+1] != 'x'
 			  || json[i+chars+4] != ';' )
 			{
-			    D( "Bad '&' at position %ld.", i+chars );
+			    D( "Bad '&' at position %ld.\n", i+chars );
 			    free_nvll( rootnvll );
 			    return NULL;
 			}
 
-			D( "Read an entity at i=%ld.", i );
+			D( "\tRead an entity at i=%ld, ", i );
+			D( "chars=%ld.\n", chars );
 
 			chars += 4; // skip this character and the next four.
 			continue;
@@ -890,13 +875,13 @@ struct dfuse_nv_ll * dfuse_parse_json( const char *json, size_t size, unsigned l
 
     if ( paren_deep != 0 )
     {
-	D( "Parse error: paren_deep is %d (and should be zero).  Bailing.", paren_deep );
+	D( "Parse error: paren_deep is %d (and should be zero).  Bailing.\n", paren_deep );
 	free_nvll( rootnvll );
 	return NULL;
     }
 
-    D( "All's well: returning '%p'.", rootnvll );
-    D( "Total characters parsed: %ld.", i );
+    D( "All's well: returning '%p'.\n", rootnvll );
+    D( "Total characters parsed: %ld.\n", i );
 
     return rootnvll;
 }
@@ -908,7 +893,7 @@ void print_nvll( struct dfuse_nv_ll *rootnvll, unsigned long deep )
 
     if ( !rootnvll )
     {
-	D( "Bailing early; asked to print an empty nvll at deep=%ld.", deep );
+	D( "Bailing early; asked to print an empty nvll at deep=%ld.\n", deep );
 	return;
     }
 
@@ -974,11 +959,15 @@ static int dfuse_opt_proc(void *data, const char *arg, int key, struct fuse_args
 	    return 1; //"1" in this case means "not my problem": typically, the mountpoint.  Possibly other gibberish, though.
     }
 
-    return -1; //Now this, on the other hand, is indefensibly paranoid.
+    D( "Fix your code at %ld.\n", __LINE__ );
+    exit(-1); //Now this, on the other hand, is indefensibly paranoid.
 }
 
 FILE *debug_fd( void )
 {
+    // In the simple case, make debugging much easier.
+    if ( stdout ) { return stdout; }
+
     if ( cached_debug_fd ) { return cached_debug_fd; }
 
     if ( !( cached_debug_fd = fopen( "/tmp/fusedebug", "a" ) ) )
@@ -1391,7 +1380,7 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
     DFUSE_FREE(url_path_struct);
     DFUSE_FREE(clean_path);
 
-    D( "Running SQL: '%s'.", sqlbuf );
+    D( "Running SQL: '%s'.\n", sqlbuf );
 
     qr = mysql_query( sql, sqlbuf );
 
@@ -1430,12 +1419,19 @@ static int dfuse_open(const char *path, struct fuse_file_info *fi)
 char * forge_update( struct dfuse_nv_ll * rootnvll )
 {
     struct dfuse_nv_ll * thisnvll;
-    char *rv, *rv_int, *clean_name, *clean_val;
+    char *rv, *rv_realloc, *rv_int, *clean_name, *clean_value;
     unsigned long sizeofrv = 0;
     const char update_intercolumn[] = ", ";
     const char update_preset[] = "`";
     const char update_midset[] = "`='";
     const char update_postset[] = "'";
+    MYSQL *sql = NULL;
+
+    if ( !(sql = dfuse_connect( NULL, NULL, NULL, NULL ) ) )
+    {
+	D( "Failed to connect to database in forge_update at line %d.\n", __LINE__ );
+	DFRV(NULL);
+    }
 
     sizeofrv = 1;
     rv = malloc(sizeofrv);
@@ -1446,6 +1442,7 @@ char * forge_update( struct dfuse_nv_ll * rootnvll )
     for ( thisnvll = rootnvll; thisnvll; thisnvll = thisnvll->next )
     {
 	D( "Forging loop with thisnvll=%p.\n", thisnvll );
+	// Does this nvll encode a deeper nesting?
 	if ( thisnvll->nvll_value )
 	{
 	    if ( (rv)[0] == '\0' )
@@ -1455,7 +1452,7 @@ char * forge_update( struct dfuse_nv_ll * rootnvll )
 		if ( !( rv = forge_update(thisnvll->nvll_value) ) )
 		{
 		    D( "Failed to forge_update with a blank rv at %d.", __LINE__ );
-		    return NULL;
+		    DFRV(NULL);
 		}
 		sizeofrv += strlen(rv);
 		D( "[Empty rv] New sizeofrv is %ld.\n", sizeofrv );
@@ -1465,35 +1462,98 @@ char * forge_update( struct dfuse_nv_ll * rootnvll )
 		D( "This should never happen with DFuse-generated JSON: got deeply-nested JSON with rv so far='%s'.", rv );
 		rv_int = forge_update(thisnvll->nvll_value);
 		sizeofrv += strlen(update_intercolumn) + strlen(rv_int);
-		if ( !( rv = realloc( rv, sizeofrv ) ) )
+		if ( !( rv_realloc = realloc( rv, sizeofrv ) ) )
 		{
 		    D( "Failed to realloc to %ld.", sizeofrv );
-		    free( rv );
-		    free( rv_int );
-		    return NULL;
+		    DFUSE_FREE( rv );
+		    DFUSE_FREE( rv_int );
+		    DFRV(NULL);
 		}
+		rv = rv_realloc;
 		sprintf( rv, "%s%s%s", rv, update_intercolumn, rv_int );
-		free( rv_int );
+		DFUSE_FREE( rv_int );
 	    }
 	}
+	// Does this nvll encode a name-value pair?
+	// TODO: First blush suggests that thisnvll->value should likely not be here, since NULL is a valid answer.
+	//	 Then again, which is the correct semantics: negative value->length and NULL value->string, perhaps?
+	//	 Or is it better to set the whole value, itself, to NULL?
 	else if ( thisnvll->name && thisnvll->value )
 	{
+	    char * debug_string;
+
 	    D( "Found a \"real\" nvll with name='%s'.\n", thisnvll->name->string );
+	    // Do we already have an rv?  If not, create one from scratch.
 	    if ( rv[0] == '\0' )
 	    {
 		D( "[real empty rv] former sizeofrv=%ld.\n", sizeofrv );
-		//I could free() then malloc(), but meh.
+		// DFUSE_MALLOC doesn't support realloc() right now.  I could free() then malloc(), but meh.
 		sizeofrv += strlen(update_preset) + thisnvll->name->length + strlen(update_midset) + thisnvll->value->length + strlen(update_postset);
 		D( "[real empty rv] subsequent sizeofrv=%ld.\n", sizeofrv );
-		if ( !( rv = realloc( rv, sizeofrv ) ) )
+		if ( !( rv_realloc = realloc( rv, sizeofrv ) ) )
 		{
 		    D( "Failed to realloc rv to='%ld'.", sizeofrv );
-		    free( rv );
-		    return NULL;
+		    DFUSE_FREE( rv );
+		    DFRV(NULL);
 		}
-		//TODO: blatantly not NULL-safe.
-		sprintf( rv, "%s%s%s%s%s", update_preset, thisnvll->name->string, update_midset, thisnvll->value->string, update_postset );
+		rv = rv_realloc;
+
+		if ( !( clean_name = DFUSE_MALLOC((thisnvll->name->length)*2+1) ) )
+		{
+		    D( "Failed to allocate for cleaned thisnvll->name with length=%ld.\n", thisnvll->name->length );
+		    DFUSE_FREE( rv );
+		    DFRV( NULL );
+		}
+
+		D( "Original nvll->name:  '%s'.\n", (debug_string = urlencode(thisnvll->name->string, thisnvll->name->length)) );
+		DFUSE_FREE( debug_string );
+		mysql_real_escape_string( sql, clean_name, thisnvll->name->string, thisnvll->name->length );
+
+		if ( !clean_name || strlen(clean_name) <= 0 )
+		{
+		    D( "clean_name, with original length %ld, got mucked up somehow.\n", thisnvll->name->length );
+		    DFUSE_FREE(rv);
+		    if ( clean_name )
+		    {
+			DFUSE_FREE( clean_name );
+		    }
+		    DFRV(NULL);
+		}
+		D( "Cleaned nvll->name:   '%s'.\n", (debug_string = urlencode(clean_name,strlen(clean_name))) );
+
+		if ( !( clean_value = DFUSE_MALLOC((thisnvll->value->length)*2+1) ) )
+		{
+		    D( "Failed to allocate for cleaned thisnvll->value with length=%ld.\n", thisnvll->value->length );
+		    DFUSE_FREE( rv );
+		    DFUSE_FREE( clean_name );
+		    DFRV( NULL );
+		}
+
+		D( "Original nvll->value: '%s'.\n", (debug_string = urlencode(thisnvll->value->string, thisnvll->value->length)) );
+		DFUSE_FREE( debug_string );
+		mysql_real_escape_string( sql, clean_value, thisnvll->value->string, thisnvll->value->length );
+
+		if ( !clean_value || strlen(clean_value) <= 0 )
+		{
+		    D( "clean_value, with original length %ld, got mucked up somehow.\n", thisnvll->value->length );
+		    DFUSE_FREE(rv);
+		    DFUSE_FREE(clean_name);
+		    if ( clean_value )
+		    {
+			DFUSE_FREE( clean_value );
+		    }
+		    DFRV(NULL);
+		}
+
+		D( "Cleaned nvll->value:  '%s'.\n", (debug_string = urlencode(clean_value, strlen(clean_value))) );
+		DFUSE_FREE( debug_string );
+
+		sprintf( rv, "%s%s%s%s%s", update_preset, clean_name, update_midset, clean_value, update_postset );
+
+		DFUSE_FREE(clean_name);
+		DFUSE_FREE(clean_value);
 	    }
+	    // We have an extant rv, so add to the end of it.
 	    else
 	    {
 		D( "[extant real rv] entering with rv='%s'.\n", rv );
@@ -1506,11 +1566,11 @@ char * forge_update( struct dfuse_nv_ll * rootnvll )
 		D( "[extant real rv] subsequent sizeofrv=%ld.\n", sizeofrv );
 		if ( !( rv = realloc( rv, sizeofrv ) ) )
 		{
-		    D( "Failed to realloc existing rv to '%ld'.", sizeofrv );
+		    D( "Failed to realloc existing rv to '%ld'.\n", sizeofrv );
 		    free( rv );
 		    return NULL;
 		}
-		//TODO: blatantly not NULL-safe.
+		//TODO: blatantly not binary-safe.
 		sprintf( rv, "%s%s%s%s%s%s%s", rv, update_intercolumn, update_preset, thisnvll->name->string, update_midset, thisnvll->value->string, update_postset );
 	    }
 	}
@@ -1577,7 +1637,7 @@ static int dfuse_write(const char *path, const char *buf, size_t size, off_t off
 
     mysql_real_escape_string( sql, clean_path, url_path, url_path_struct->length );
 
-    if ( strlen(clean_path) <= 0 )
+    if ( !clean_path || strlen(clean_path) <= 0 )
     {
 	DFUSE_FREE(url_path);
 	DFUSE_FREE(url_path_struct);
@@ -1672,7 +1732,7 @@ static int dfuse_read(const char *path, char *buf, size_t size, off_t offset,
 
     mysql_real_escape_string( sql, clean_path, url_path, url_path_struct->length );
 
-    if ( strlen(clean_path) <= 0 )
+    if ( clean_path || strlen(clean_path) <= 0 )
     {
 	DFUSE_FREE(url_path);
 	DFUSE_FREE(url_path_struct);
@@ -1807,20 +1867,6 @@ int main(int argc, char *argv[])
     MYSQL *sql;
 #endif
 
-#if 0
-		/* { "foo": { "bar": "baz", "boo": "boz" } } */
-    char * foo = "{ \"foo\": { \"bar&x36;\": \"&x34;baz\", \"&x35;boo&x33;\": \"bo&x32;z\" } }";
-//    char * foo = "{\n     \"firstName\": \"John\",\n     \"lastName\": \"Smith\",\n     \"age\": \"&x32;5\",\n     \"address\":\n     {\n         \"streetAddress\": \"21 2nd Street\",\n         \"city\": \"New York\",\n         \"state\": \"NY\",\n         \"postalCode\": \"10021\"\n     },\n     \"phoneNumber\":\n     {\n         \"home\": {\n           \"type\": \"home\",\n           \"number\": \"212 555-1234\"\n         },\n         \"fax\": {\n           \"type\": \"fax\",\n           \"number\": \"646 555-4567\"\n         }\n     }\n }\n";
-    struct dfuse_nv_ll * somenvll;
-
-    somenvll = dfuse_parse_json( foo, NULL );
-
-    print_nvll( somenvll, 0 );
-
-    exit( 0 );
-#endif
-
-
 //    printf( "Starting...\n" );
 
     /* clear structure that holds our options */
@@ -1839,9 +1885,9 @@ int main(int argc, char *argv[])
     {
 	printf( "Undefined critical variable.\n" );
 
-	printf( "You supplied: '%s', '%s', '%s', '%s', '%s', '%s', '%s'.\n",
-	  options.username, options.password, options.hostname, options.database,
-	  options.table, options.prikey, options.columns );
+	printf( "You supplied:\n%20s: '%s'\n%20s: '%s'\n%20s: '%s'\n%20s: '%s'\n%20s: '%s'\n%20s: '%s'\n%20s: '%s'\n",
+	  "Username", options.username, "Password", options.password, "Hostname", options.hostname,
+	  "Database", options.database, "Table",  options.table, "Primary Key", options.prikey, "Columns", options.columns );
 	usage(argv);
 
 	return -1;
@@ -1852,7 +1898,7 @@ int main(int argc, char *argv[])
 	printf( "Invalid option set specified: you must declare a username, password, hostname, and database.\n" );
 	usage(argv);
 
-	printf( "You specified: '%s', '%s', '%s', '%s'.\n", options.username, options.password, options.hostname, options.database );
+	printf( "You specified: '%s', '%s', '%s', and '%s', respectively\n", options.username, options.password, options.hostname, options.database );
 	return -1;
     }
 
@@ -1917,6 +1963,21 @@ int main(int argc, char *argv[])
 	printf( "Failed to connect: MySQL server said, '%s'.\n", mysql_error( NULL ) );
 	return -1;
     }
+
+#if 0
+		/* { "foo": { "bar": "baz", "boo": "boz" } } */
+    char * foo = "{ \"foo\": { \"bar&x36;\": \"&x00;&x01;&x02;&x03;&x04;&x05;&x06;&x07;&x08;&x09;&x0a;&x0b;&x0c;&x0d;&x0e;&x0f;&x10;&x11;&x12;&x13;&x14;&x15;&x16;&x17;&x18;&x19;&x1a;&x1b;&x1c;&x1d;&x1e;&x1f;&x20;&x21;&x22;&x23;&x24;&x25;&x26;&x27;&x28;&x29;&x2a;&x2b;&x2c;&x2d;&x2e;&x2f;&x30;&x31;&x32;&x33;&x34;&x35;&x36;&x37;&x38;&x39;&x3a;&x3b;&x3c;&x3d;&x3e;&x3f;&x40;&x41;&x42;&x43;&x44;&x45;&x46;&x47;&x48;&x49;&x4a;&x4b;&x4c;&x4d;&x4e;&x4f;&x50;&x51;&x52;&x53;&x54;&x55;&x56;&x57;&x58;&x59;&x5a;&x5b;&x5c;&x5d;&x5e;&x5f;&x60;&x61;&x62;&x63;&x64;&x65;&x66;&x67;&x68;&x69;&x6a;&x6b;&x6c;&x6d;&x6e;&x6f;&x70;&x71;&x72;&x73;&x74;&x75;&x76;&x77;&x78;&x79;&x7a;&x7b;&x7c;&x7d;&x7e;&x7f;&x80;&x81;&x82;&x83;&x84;&x85;&x86;&x87;&x88;&x89;&x8a;&x8b;&x8c;&x8d;&x8e;&x8f;&x90;&x91;&x92;&x93;&x94;&x95;&x96;&x97;&x98;&x99;&x9a;&x9b;&x9c;&x9d;&x9e;&x9f;&xa0;&xa1;&xa2;&xa3;&xa4;&xa5;&xa6;&xa7;&xa8;&xa9;&xaa;&xab;&xac;&xad;&xae;&xaf;&xb0;&xb1;&xb2;&xb3;&xb4;&xb5;&xb6;&xb7;&xb8;&xb9;&xba;&xbb;&xbc;&xbd;&xbe;&xbf;&xc0;&xc1;&xc2;&xc3;&xc4;&xc5;&xc6;&xc7;&xc8;&xc9;&xca;&xcb;&xcc;&xcd;&xce;&xcf;&xd0;&xd1;&xd2;&xd3;&xd4;&xd5;&xd6;&xd7;&xd8;&xd9;&xda;&xdb;&xdc;&xdd;&xde;&xdf;&xe0;&xe1;&xe2;&xe3;&xe4;&xe5;&xe6;&xe7;&xe8;&xe9;&xea;&xeb;&xec;&xed;&xee;&xef;&xf0;&xf1;&xf2;&xf3;&xf4;&xf5;&xf6;&xf7;&xf8;&xf9;&xfa;&xfb;&xfc;&xfd;&xfe;&xff; `az\", \"&x35;bo'o&x33;\": \"bo&x32;z\" } }";
+//    char * foo = "{\n     \"firstName\": \"John\",\n     \"lastName\": \"Smith\",\n     \"age\": \"&x32;5\",\n     \"address\":\n     {\n         \"streetAddress\": \"21 2nd Street\",\n         \"city\": \"New York\",\n         \"state\": \"NY\",\n         \"postalCode\": \"10021\"\n     },\n     \"phoneNumber\":\n     {\n         \"home\": {\n           \"type\": \"home\",\n           \"number\": \"212 555-1234\"\n         },\n         \"fax\": {\n           \"type\": \"fax\",\n           \"number\": \"646 555-4567\"\n         }\n     }\n }\n";
+    struct dfuse_nv_ll * somenvll;
+
+    somenvll = dfuse_parse_json( foo, strlen(foo), NULL );
+
+    print_nvll( somenvll, 0 );
+
+    printf( "Forged update: '%s'.\n", forge_update( somenvll ) );
+
+    exit( 0 );
+#endif
 
     rv = fuse_main(args.argc, args.argv, &dfuse_oper);
 
